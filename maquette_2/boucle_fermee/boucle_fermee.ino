@@ -5,53 +5,71 @@
 
   Un interrupteur gere une fin de course et l'initialisation au homing (interrupteur NC, ferme, donc 0, car connecte à GND par defaut)
 
-  Test en cours des interruptions pour récpérer les informations du codeur
+  Les codeurs sont lus en binaire (lecture rapide) et sur les fronts montants ET descendants
 
-  V 1  Hadrien Patte 22/12/2016
+  Implementation d'un asservissement proportionel
+
+  V 2  Hadrien Patte 22/12/2016
+  ----------------------------------------------------------------------------------------------------------------------------*/
+/* -------------------------------------------------------------------------------------------------------------------------
+  Notes : pas de pulldown internes sur des arduino, uniquement des pullup
+          volatile pourles variables modifiables en interruption
+          const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
 
-volatile long encoderPosition = 0;             // Position sent back by the encoder
+volatile long position = 0;             // Position sent back by the encoder
 
 long previousMillis = 0;                       // will store last time LED was updated
 
 
 // Connexion du driver moteur L298N aux broches numeriques Arduino
-const int enA          =  9;      // Pin PWM enable
-const int in1          =  10;     // Pin Moteur 1
-const int in2          =  11;     // Pin Moteur 2
+const int pinPWM             =  9;      // Pin PWM enable
+const int pinMoteur1         =  10;     // Pin Moteur 1
+const int pinMoteur2         =  11;     // Pin Moteur 2
 
-const int encoderPinA  =   2;     // Broche signal codeur A
-const int encoderPinB  =   3;     // Broche signal codeur B
-const int rougePin     =   5;     // Broche signal bouton rouge
-const int vertPin      =   6;     // Broche signal bouton vert
-int rougeState         =   1;     // Variable de status du bouton rouge
-int vertState          =   1;     // Variable de status du bouton vert
+const int pinCodeurA         =   2;     // Broche signal codeur A
+const int pinCodeurB         =   3;     // Broche signal codeur B
+int stateCodeurA             =   0;     // Variable d'etat du codeur A
+int stateCodeurB             =   0;     // Variable d'etat du codeur B
 
-const int interrupteur =  12;     // Broche de l'interrupteur de fin de course
-int testPin = 13;
-int vitesse            =   0;     // Vitesse lue sur le potentiometre
-int homingSpeed        = 255;     // Vitesse de homing
+const int pinBoutonRouge     =   5;     // Broche signal bouton rouge
+const int pinBoutonVert      =   6;     // Broche signal bouton vert
+int stateBoutonRouge         =   1;     // Variable d'etat du bouton rouge
+int stateBoutonVert          =   1;     // Variable d'etat du bouton vert
 
-int stateA = 0;
-int stateB = 0;
+const int pinInterrupteur    =  12;     // Broche de l'interrupteur de fin de course et d'initialisation de la position
+
+int vitesse                  = 255;     // Vitesse PWM du moteur (map 0-255)
+int homingSpeed              = 255;     // Vitesse de homing
+
+const int pinTest            =  13;
+
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(115200);                 // Activation du moniteur serie
 
-  pinMode(enA,      OUTPUT);
-  pinMode(in1,      OUTPUT);
-  pinMode(in2,      OUTPUT);
+  // Initialisation des broches de commande du moteur
+  pinMode(pinPWM,     OUTPUT);
+  pinMode(pinMoteur1, OUTPUT);
+  pinMode(pinMoteur2, OUTPUT);
 
-  pinMode(encoderPinA,  INPUT);
-  pinMode(encoderPinB,  INPUT);
+  // Initialisation des broches des codeurs
+  pinMode(pinCodeurA, INPUT);
+  pinMode(pinCodeurB, INPUT);
 
-  pinMode(interrupteur, INPUT);          // configure la broche ILS en entrée
-  digitalWrite(interrupteur,  HIGH);      // Activation pulldown interne
+  // Initialisation de la broche de test
+  pinMode(pinTest, OUTPUT);
 
-  pinMode(rougePin, INPUT);
-  pinMode(vertPin,  INPUT);
-  digitalWrite(rougePin, HIGH);  // Activation pullup interne
-  digitalWrite(vertPin,  HIGH);  // Activation pullup interne
-  pinMode(testPin, OUTPUT);
+  // Initialisation de la broche de l'interrupteur
+  pinMode(pinInterrupteur,      INPUT);
+  digitalWrite(pinInterrupteur, HIGH);  // Activation pullup interne
+
+  // Initialisation des broches des boutons
+  pinMode(pinBoutonRouge,      INPUT);
+  pinMode(pinBoutonVert,       INPUT);
+  digitalWrite(pinBoutonRouge, HIGH);  // Activation pullup interne
+  digitalWrite(pinBoutonVert,  HIGH);  // Activation pullup interne
+
+  // Initialise la position
   homing();
   attachInterrupt(0, doEncoderMotor, CHANGE); // sur le codeur A en 0 et B en 1
 
@@ -60,50 +78,48 @@ void setup() {
 void loop() {
 
   if (millis() > previousMillis + 300 )  {
-    //Serial.println(sens);
-    Serial.print("Encoder position = ");
-    Serial.println(encoderPosition);
+    Serial.print("Position = ");
+    Serial.println(position);
     previousMillis = millis();
   }
 
-  if (digitalRead(interrupteur) == LOW) {
-    digitalWrite(testPin, HIGH);
-  }
-  else {
-    digitalWrite(testPin, LOW);
-  }
+  stateBoutonRouge = !digitalRead(pinBoutonRouge);   // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
+  stateBoutonVert  = !digitalRead(pinBoutonVert);    // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
 
-  rougeState = !digitalRead(rougePin);   // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
-  vertState  = !digitalRead(vertPin);    // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
+  analogWrite(pinPWM, vitesse);                           // Envoi de la vitesse sur la pin PWM
 
-  vitesse = 255;
-  analogWrite(enA, vitesse);                           // Envoi de la vitesse sur la pin PWM enA
-
-  // Test des boutons
-  if ((vertState == HIGH) and (encoderPosition > 0)) {
+  // Test des boutons pour deplacement manuel (fin de courses logicielles)
+  if ((stateBoutonVert == HIGH) and (position > 0)) {
     deplacementDroite();
   }
-  else if ((rougeState == HIGH) and (encoderPosition < 3200)) {
+  else if ((stateBoutonRouge == HIGH) and (position < 3200)) {
     deplacementGauche();
   }
   else {
     arretMoteur();
   }
 
+  /*
+    if (((PIND & B00001000) >> 3) == HIGH) {
+      digitalWrite(pinTest, HIGH);
+    }
+    else {
+      digitalWrite(pinTest, LOW);
+    }
+  */
 }
-
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void homing() {
-  // On Fait avancer le chariot vers la gauche tant que l'ILS gauche a le status 0. On arrete le moteur quand l'ILS passe au status 1
-  analogWrite(enA, homingSpeed);            // Envoi de la vitesse sur la pin PWM enA
-  while (digitalRead(interrupteur) == HIGH) {
+  // On Fait avancer le chariot vers la droite tant que l'interrupteur a le status 0. On arrete le moteur quand l'interrupteur passe au status 1
+  analogWrite(pinPWM, homingSpeed);            // Envoi de la vitesse de homing sur la pin PWM
+  while (digitalRead(pinInterrupteur) == HIGH) {
     deplacementDroite();
   }
   arretMoteur();
   delay(300);
 
-  while (digitalRead(interrupteur) == LOW) {
+  while (digitalRead(pinInterrupteur) == LOW) {
     deplacementGauche();
   }
   arretMoteur();
@@ -113,47 +129,49 @@ void homing() {
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementGauche() {
   // Déplacement vers la gauche du chariot
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, HIGH);
+  digitalWrite(pinMoteur1, LOW);
+  digitalWrite(pinMoteur2, HIGH);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementDroite() {
   // Déplacement vers la droite du chariot
-  digitalWrite(in1, HIGH);
-  digitalWrite(in2, LOW);
+  digitalWrite(pinMoteur1, HIGH);
+  digitalWrite(pinMoteur2, LOW);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void arretMoteur() {
   // Arret du moteur
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, LOW);
+  digitalWrite(pinMoteur1, LOW);
+  digitalWrite(pinMoteur2, LOW);
 }
-void doEncoderMotor() {
-  //stateA = (PINE & B00010000) >> 4;
-  //stateB = (PINH & B00100000) >> 5;   //que pour la pin 8
-  stateA = digitalRead(encoderPinA);
-  stateB = digitalRead(encoderPinB);
 
-  if (stateA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(encoderPinA)==HIGH){ .... read PE4
-    if (stateB == HIGH) {             // Check B phase to see which way. if(digitalRead(encoderPinB)==LOW) { .... read PH5
-      encoderPosition -- ;           // CCW
+// ---------------------------------------------------------------------------------------------------------------------------
+void doEncoderMotor() {
+  stateCodeurA = (PIND & B00000100) >> 2;  // Lecture de la broche 2 en binaire ( equivaut a stateCodeurA = digitalRead(pinCodeurA); )
+  stateCodeurB = (PIND & B00001000) >> 3;  // Lecture de la broche 3 en binaire ( equivaut a stateCodeurB = digitalRead(pinCodeurB); )
+
+  if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
+    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
+      position -- ;           // CCW
       //sens = false;
     }
     else {
-      encoderPosition ++ ;                      // CW
+      position ++ ;                      // CW
       //sens = true;
     }
   }
   else {
-    if (stateB == HIGH) {             // Check B phase to see which way. if(digitalRead(encoderPinB)==LOW) { .... read PH5
-      encoderPosition ++ ;                       // CCW
+    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
+      position ++ ;                       // CCW
       //sens = true;
     }
     else {
-      encoderPosition -- ;                       // CW
+      position -- ;                       // CW
       //sens = false;
     }
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
