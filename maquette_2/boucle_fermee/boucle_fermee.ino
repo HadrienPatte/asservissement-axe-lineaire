@@ -9,17 +9,17 @@
 
   Implementation d'un asservissement proportionel
 
-  V 2  Hadrien Patte 22/12/2016
+  V 3  Hadrien Patte 22/12/2016
   ----------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------------------------------------------------------------------
-  Notes : pas de pulldown internes sur des arduino, uniquement des pullup
-          volatile pourles variables modifiables en interruption
-          const pour les pin
+  Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
+          * volatile pour les variables modifiables en interruption
+          * const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
 
-volatile long position = 0;             // Position sent back by the encoder
+volatile long position = 0;             // position mesuree par le codeur
 
-long previousMillis = 0;                       // will store last time LED was updated
+long previousMillis = 0;                // pour l'affichage de la position sur le port serie
 
 
 // Connexion du driver moteur L298N aux broches numeriques Arduino
