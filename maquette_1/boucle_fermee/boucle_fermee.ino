@@ -1,54 +1,62 @@
 /* -------------------------------------------------------------------------------------------------------------------------
   Pilotage moteur DC avec 2 boutons et un potentiometre
 
-  Le bouton de gauche (rouge) fait tourner le moteur dans un sens, l'autre bouton (vert) dans l'autre sens
-  Le potentiomètre permet de régler la vitesse
   Deux ILS gèrent les fin de course (interrupteur NC, ferme, donc 0, car connecte à GND par defaut)
   Le homing se fait sur l'ILS gauche
 
+  Implementation d'un asservissement proportionel
+  Implementation de la vitesse instantanee par integration de la position
 
-  Test en cours des interruptions pour récpérer les informations des codeurs du moteur
-
+  V 2  Hadrien Patte 28/01/2017
+  ----------------------------------------------------------------------------------------------------------------------------*/
+/* -------------------------------------------------------------------------------------------------------------------------
+  Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
+            volatile pour les variables modifiables en interruption
+            const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
 
-const int encoderPinA  = 2;                        // PE4
-const int encoderPinB  = 3;                        // PH5
+volatile long position = 0;             // position mesuree par le codeur
 
-int stateA = 0;
-int stateB = 0;
-
-volatile bool sens = false;
-
-
-volatile long encoderPosition = 0;             // Position sent back by the encoder
-
-long previousMillis = 0;                       // will store last time LED was updated
+long previousMillis = 0;                // pour l'affichage de la position sur le port serie
 
 
 // Connexion du driver moteur L298N aux broches numeriques Arduino
-const int enA          =  12;     // Pin PWM enable
-const int in1          =  11;     // Pin Moteur 1
-const int in2          =  10;     // Pin Moteur 2
+const int pinPWM          =  12;     // Pin PWM enable
+const int pinMoteur1          =  11;     // Pin Moteur 1
+const int pinMoteur2          =  10;     // Pin Moteur 2
+
+const int pinCodeurA         =   2;     // Broche signal codeur A
+const int pinCodeurB         =   3;     // Broche signal codeur B
+int stateCodeurA             =   0;     // Variable d'etat du codeur A
+int stateCodeurB             =   0;     // Variable d'etat du codeur B
+
 
 const int ilsDroitPin  =  14;     // Broche signal de l'ILS droit
-const int ilsGauchePin =  15;     // Broche signal de l'ILS gauche (celui qui sert à l'homing)
+const int ilsGauchePin =  15;     // Broche signal de l'ILS gauche (celui qui sert pour le homing)
 int homingSpeed        = 125;     // Vitesse de homing
 
-int vitesse            = 150;     // Vitesse lue sur le potentiometre
+int vitesse            = 150;
 
-long consigne          = 7230;
+long consigne          = 5000;
+
+volatile bool sens = false;
+
+float vitesseInstantanee = 0;
+long previousposition = 0;
+
+int period = 50;
 
 void setup() {
   Serial.begin(115200);           // Activation de la communication sur le port série
 
-  pinMode(enA,      OUTPUT);
-  pinMode(in1,      OUTPUT);
-  pinMode(in2,      OUTPUT);
+  pinMode(pinPWM,      OUTPUT);
+  pinMode(pinMoteur1,      OUTPUT);
+  pinMode(pinMoteur2,      OUTPUT);
 
-  pinMode(encoderPinA,  INPUT);
-  pinMode(encoderPinB,  INPUT);
-  //digitalWrite(encoderPinA, HIGH);  // Activation pullup interne
-  //digitalWrite(encoderPinB, HIGH);  // Activation pullup interne
+  pinMode(pinCodeurA,  INPUT);
+  pinMode(pinCodeurB,  INPUT);
+  //digitalWrite(pinCodeurA, HIGH);  // Activation pullup interne
+  //digitalWrite(pinCodeurB, HIGH);  // Activation pullup interne
 
 
   pinMode(ilsDroitPin,  INPUT);          // configure la broche ILS en entrée
@@ -61,46 +69,67 @@ void setup() {
   attachInterrupt(0, doEncoderMotor, CHANGE);   // Execute doEncoderMotor function on interrupt 0 - pin 2
   // triggered by a "CHANGE". Means RISING ou FALLING edge
 
-  deplacementPosition(consigne);
+  previousposition = position;
+  //deplacementPosition(consigne);
 }
 
 void loop() {
 
 
   // Print encoder position every "period" through the serial port
-  if (millis() > previousMillis + 300 )  {
+  if (millis() > previousMillis + period )  {
     //Serial.println(sens);
-    Serial.print("Encoder position = ");
-    Serial.println(encoderPosition);
+    if (vitesseInstantanee != 0.0) {
+      //Serial.print("vitesseInstantanee = ");
+      Serial.println(vitesseInstantanee);
+    }
+    vitesseInstantanee = 1000 * (position - previousposition) / period;
+    previousposition = position;
     previousMillis = millis();
   }
 
   /*// Test de fin de course
     if ((digitalRead(ilsGauchePin) == 1) or (digitalRead(ilsDroitPin) == 1)) {
-    digitalWrite(in1, LOW);            // Arret du moteur
-    digitalWrite(in2, LOW);
+    digitalWrite(pinMoteur1, LOW);            // Arret du moteur
+    digitalWrite(pinMoteur2, LOW);
     }*/
+  // integration de la position pour avoir la vitesse instantanee
 
-
-  analogWrite(enA, vitesse);                           // Envoi de la vitesse sur la pin PWM enA
-
-/*
-  if (consigne - 10 > encoderPosition) {
+  analogWrite(pinPWM, vitesse);                           // Envoi de la vitesse sur la pin PWM pinPWM
+  /*while (abs(consigne - position) > 10) {
+    if (consigne > position) {
+      deplacementDroite();
+    }
+    else {
+      deplacementGauche();
+    }
+    }*/
+  if (consigne > position + 10) {
     deplacementDroite();
   }
-  else if (consigne + 10 < encoderPosition) {
+  else if (consigne < position - 10) {
     deplacementGauche();
   }
   else {
     arretMoteur();
-  }*/
+  }
+  /*
+    if (consigne - 10 > position) {
+      deplacementDroite();
+    }
+    else if (consigne + 10 < position) {
+      deplacementGauche();
+    }
+    else {
+      arretMoteur();
+    }*/
 
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void homing() {
   // On Fait avancer le chariot vers la gauche tant que l'ILS gauche a le status 0. On arrete le moteur quand l'ILS passe au status 1
-  analogWrite(enA, homingSpeed);            // Envoi de la vitesse sur la pin PWM enA
+  analogWrite(pinPWM, homingSpeed);            // Envoi de la vitesse sur la pin PWM pinPWM
   while (digitalRead(ilsGauchePin) == 0) {
     deplacementGauche();
   }
@@ -117,29 +146,29 @@ void homing() {
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementGauche() {
   // Déplacement vers la gauche du chariot
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, HIGH);
+  digitalWrite(pinMoteur1, LOW);
+  digitalWrite(pinMoteur2, HIGH);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementDroite() {
   // Déplacement vers la droite du chariot
-  digitalWrite(in1, HIGH);
-  digitalWrite(in2, LOW);
+  digitalWrite(pinMoteur1, HIGH);
+  digitalWrite(pinMoteur2, LOW);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void arretMoteur() {
   // Arret du moteur
-  digitalWrite(in1, LOW);
-  digitalWrite(in2, LOW);
+  digitalWrite(pinMoteur1, LOW);
+  digitalWrite(pinMoteur2, LOW);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementPosition(long consigne) {
   // deplacement jusqu a la position consigne avec retroaction
-  while (abs(consigne - encoderPosition) > 10) {
-    if (consigne > encoderPosition) {
+  while (abs(consigne - position) > 10) {
+    if (consigne > position) {
       deplacementDroite();
     }
     else {
@@ -154,31 +183,31 @@ void deplacementPosition(long consigne) {
 // Code for interrupt 0. Gives the encoder signed cumulated ticks, including CW and CCW (plus and minus) ways
 
 void doEncoderMotor() {
-  //stateA = (PINE & B00010000) >> 4;
-  //stateB = (PINH & B00100000) >> 5;   //que pour la pin 8
+  //stateCodeurA = (PINE & B00010000) >> 4;
+  //stateCodeurB = (PINH & B00100000) >> 5;   //que pour la pin 8
 
-  stateA = digitalRead(encoderPinA);
-  stateB = digitalRead(encoderPinB);
-  if (stateA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(encoderPinA)==HIGH){ .... read PE4
-    if (stateB == LOW) {             // Check B phase to see which way. if(digitalRead(encoderPinB)==LOW) { .... read PH5
-      encoderPosition -- ;           // CCW
+  stateCodeurA = digitalRead(pinCodeurA);
+  stateCodeurB = digitalRead(pinCodeurB);
+  if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
+    if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
+      position -- ;           // CCW
       sens = false;
     }
 
     else {
-      encoderPosition ++ ;                      // CW
+      position ++ ;                      // CW
       //sens = true;
     }
   }
 
   else {
-    if (stateB == LOW) {             // Check B phase to see which way. if(digitalRead(encoderPinB)==LOW) { .... read PH5
-      encoderPosition ++ ;                       // CCW
+    if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
+      position ++ ;                       // CCW
       sens = true;
     }
 
     else {
-      encoderPosition -- ;                       // CW
+      position -- ;                       // CW
       //sens = false;
     }
   }
