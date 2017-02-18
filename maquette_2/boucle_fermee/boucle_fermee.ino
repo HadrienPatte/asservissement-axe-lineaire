@@ -5,19 +5,25 @@
 
   Un interrupteur gere une fin de course et l'initialisation au homing (interrupteur NC, ferme, donc 0, car connecte à GND par defaut)
 
-  Les codeurs sont lus en binaire (lecture rapide) et sur les fronts montants ET descendants
+  Les codeurs sont lus en binaire (lecture rapide) et sur les fronts montants ET descendants des deux codeurs ( 2 interruptions )
 
   Implementation d'un asservissement proportionel
 
-  V 3  Hadrien Patte 22/12/2016
+  Le systeme physique est tres amorti, ce qui semble rendre une reponse oscillante difficile a mettre en place
+
+  La course est de 6647 impulsions
+
+  V 4  Hadrien Patte 18/02/2017
   ----------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------------------------------------------------------------------
   Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
-          * volatile pour les variables modifiables en interruption
-          * const pour les pin
+            volatile pour les variables modifiables en interruption
+            const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
 
+long consigne = 3000;
 volatile long position = 0;             // position mesuree par le codeur
+long previousposition = 0;
 
 long previousMillis = 0;                // pour l'affichage de la position sur le port serie
 
@@ -71,12 +77,34 @@ void setup() {
 
   // Initialise la position
   homing();
-  attachInterrupt(0, doEncoderMotor, CHANGE); // sur le codeur A en 0 et B en 1
-
+  attachInterrupt(0, doEncoderMotorA, CHANGE); // interruption 0 sur le codeur A (PIN 2)
+  attachInterrupt(1, doEncoderMotorB, CHANGE); // interruption 1 sur le codeur B (PIN 3)
 }
 
 void loop() {
+  // loop de controle asservi (reponse a une consigne)
 
+  if (millis() > previousMillis + 300 )  {
+    Serial.print("Position = ");
+    Serial.println(position);
+    previousMillis = millis();
+  }
+
+  analogWrite(pinPWM, vitesse);
+
+  if ((consigne - position) < -1) {
+    deplacementDroite();
+  }
+  else if ((consigne - position) > 1) {
+    deplacementGauche();
+  }
+  else {
+    arretMoteur();
+  }
+}
+
+/*void loop() {
+  // loop de controle manuel (boutons)
   if (millis() > previousMillis + 300 )  {
     Serial.print("Position = ");
     Serial.println(position);
@@ -92,22 +120,15 @@ void loop() {
   if ((stateBoutonVert == HIGH) and (position > 0)) {
     deplacementDroite();
   }
-  else if ((stateBoutonRouge == HIGH) and (position < 3200)) {
+  else if ((stateBoutonRouge == HIGH) and (position < 6000)) {
     deplacementGauche();
   }
   else {
     arretMoteur();
   }
 
-  /*
-    if (((PIND & B00001000) >> 3) == HIGH) {
-      digitalWrite(pinTest, HIGH);
-    }
-    else {
-      digitalWrite(pinTest, LOW);
-    }
-  */
-}
+
+  }*/
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void homing() {
@@ -128,18 +149,34 @@ void homing() {
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementGauche() {
-  // Déplacement vers la gauche du chariot
+  // Deplacement vers la gauche du chariot
   digitalWrite(pinMoteur1, LOW);
   digitalWrite(pinMoteur2, HIGH);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementDroite() {
-  // Déplacement vers la droite du chariot
+  // Deplacement vers la droite du chariot
   digitalWrite(pinMoteur1, HIGH);
   digitalWrite(pinMoteur2, LOW);
 }
+// ---------------------------------------------------------------------------------------------------------------------------
+/*void deplacementProportionnel(k) {
+  // Deplacement du chariot proportionnel a k
+  if (k > 0) {
+    analogWrite(pinPWM, vitesse);
+    deplacementGauche();
+  }
+  else if (k < 0) {
+    analogWrite(pinPWM, vitesse);
+    deplacementDroite();
+  }
+  else {
+    analogWrite(pinPWM, 0);
+    arretMoteur();
+  }
 
+}*/
 // ---------------------------------------------------------------------------------------------------------------------------
 void arretMoteur() {
   // Arret du moteur
@@ -148,7 +185,7 @@ void arretMoteur() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-void doEncoderMotor() {
+void doEncoderMotorA() {
   stateCodeurA = (PIND & B00000100) >> 2;  // Lecture de la broche 2 en binaire ( equivaut a stateCodeurA = digitalRead(pinCodeurA); )
   stateCodeurB = (PIND & B00001000) >> 3;  // Lecture de la broche 3 en binaire ( equivaut a stateCodeurB = digitalRead(pinCodeurB); )
 
@@ -173,5 +210,30 @@ void doEncoderMotor() {
     }
   }
 }
+// ---------------------------------------------------------------------------------------------------------------------------
+void doEncoderMotorB() {
+  stateCodeurA = (PIND & B00000100) >> 2;  // Lecture de la broche 2 en binaire ( equivaut a stateCodeurA = digitalRead(pinCodeurA); )
+  stateCodeurB = (PIND & B00001000) >> 3;  // Lecture de la broche 3 en binaire ( equivaut a stateCodeurB = digitalRead(pinCodeurB); )
 
+  if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
+    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
+      position ++ ;           // CCW
+      //sens = false;
+    }
+    else {
+      position -- ;                      // CW
+      //sens = true;
+    }
+  }
+  else {
+    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
+      position -- ;                       // CCW
+      //sens = true;
+    }
+    else {
+      position ++ ;                       // CW
+      //sens = false;
+    }
+  }
+}
 // ---------------------------------------------------------------------------------------------------------------------------
