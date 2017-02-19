@@ -7,15 +7,17 @@
   Implementation d'un asservissement proportionel
   Implementation de la vitesse instantanee par integration de la position
 
-  V 3  Hadrien Patte 19/02/2017
+  V 4  Hadrien Patte 19/02/2017
   ----------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------------------------------------------------------------------
   Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
             volatile pour les variables modifiables en interruption
             const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
-long consigne = 6000;
-volatile long position = 0;             // position mesuree par le codeur
+#include <PID_v2.h>
+
+double consigne = 8000;
+volatile double position = 0;             // position mesuree par le codeur
 
 long previousMillis = 0;                // pour l'affichage de la position sur le port serie
 
@@ -47,13 +49,15 @@ int period = 50;
 //PID
 int periodPID = 100;
 float kp = 1;
-float ki = 0.2;
-float kd = 0.2;
+float ki = 0;
+float kd = 0;
 //float previousError = 0;
 float previousPosition;
 float sumError;
-float output;
+double output;
 unsigned long previousTime;
+
+PID myPID(&position, &output, &consigne, kp, ki, kd, DIRECT);
 
 void setup() {
   Serial.begin(115200);           // Activation de la communication sur le port série
@@ -73,7 +77,7 @@ void setup() {
   digitalWrite(ilsDroitPin,  HIGH);      // Activation pullup interne
   digitalWrite(ilsGauchePin, HIGH);      // Activation pullup interne
 
-  homing();
+  homing(homingSpeed);
 
   attachInterrupt(0, doEncoderMotorA, CHANGE); // interruption 0 sur le codeur A (PIN 2)
   attachInterrupt(1, doEncoderMotorB, CHANGE); // interruption 1 sur le codeur B (PIN 3)
@@ -81,14 +85,21 @@ void setup() {
 
   //previousposition = position;
   //deplacementPosition(consigne);
+
+  //Setup the pid
+  myPID.SetMode(AUTOMATIC);
+  myPID.SetSampleTime(2);
+  myPID.SetOutputLimits(-255, 255);
 }
 
 void loop() {
 
-  correcteur();
+  myPID.Compute();
+
+  //correcteur();
   // Print encoder position every "period" through the serial port
   if (millis() > previousMillis + period )  {
-    Serial.println(output/1000);
+    Serial.println(position);
     /*if (vitesseInstantanee != 0.0) {
       //Serial.print("vitesseInstantanee = ");
       Serial.println(vitesseInstantanee);
@@ -105,22 +116,12 @@ void loop() {
     }*/
   // integration de la position pour avoir la vitesse instantanee
 
-  analogWrite(pinPWM, vitesse);                           // Envoi de la vitesse sur la pin PWM pinPWM
-  /*while (abs(consigne - position) > 10) {
-    if (consigne > position) {
-      deplacementDroite();
-    }
-    else {
-      deplacementGauche();
-    }
-    }*/
 
-
-  if (consigne > position + 10) {
-    deplacementDroite();
+  if (output > 200) {
+    deplacementDroite(output);
   }
-  else if (consigne < position - 10) {
-    deplacementGauche();
+  else if (output < -200) {
+    deplacementGauche(abs(output));
   }
   else {
     arretMoteur();
@@ -130,32 +131,33 @@ void loop() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-void homing() {
+void homing(int vitesseHoming) {
   // On Fait avancer le chariot vers la gauche tant que l'ILS gauche a le status 0. On arrete le moteur quand l'ILS passe au status 1
-  analogWrite(pinPWM, homingSpeed);            // Envoi de la vitesse sur la pin PWM pinPWM
   while (digitalRead(ilsGauchePin) == 0) {
-    deplacementGauche();
+    deplacementGauche(vitesseHoming);
   }
   arretMoteur();
   delay(300);
 
   while (digitalRead(ilsGauchePin) == 1) {
-    deplacementDroite();
+    deplacementDroite(vitesseHoming);
   }
   arretMoteur();
   delay(300);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-void deplacementGauche() {
+void deplacementGauche(int vitesse) {
   // Déplacement vers la gauche du chariot
+  analogWrite(pinPWM, vitesse);            // Envoi de la vitesse sur la pin PWM pinPWM
   digitalWrite(pinMoteur1, LOW);
   digitalWrite(pinMoteur2, HIGH);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-void deplacementDroite() {
+void deplacementDroite(int vitesse) {
   // Déplacement vers la droite du chariot
+  analogWrite(pinPWM, vitesse);            // Envoi de la vitesse sur la pin PWM pinPWM
   digitalWrite(pinMoteur1, HIGH);
   digitalWrite(pinMoteur2, LOW);
 }
@@ -163,6 +165,7 @@ void deplacementDroite() {
 // ---------------------------------------------------------------------------------------------------------------------------
 void arretMoteur() {
   // Arret du moteur
+  analogWrite(pinPWM, 0);
   digitalWrite(pinMoteur1, LOW);
   digitalWrite(pinMoteur2, LOW);
 }
@@ -172,10 +175,10 @@ void deplacementPosition(long consigne) {
   // deplacement jusqu a la position consigne avec retroaction
   while (abs(consigne - position) > 10) {
     if (consigne > position) {
-      deplacementDroite();
+      deplacementDroite(vitesse);
     }
     else {
-      deplacementGauche();
+      deplacementGauche(vitesse);
     }
   }
   arretMoteur();
