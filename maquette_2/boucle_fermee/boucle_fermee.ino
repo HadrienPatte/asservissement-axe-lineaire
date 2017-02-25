@@ -7,32 +7,41 @@
 
   Les codeurs sont lus en binaire (lecture rapide) et sur les fronts montants ET descendants des deux codeurs ( 2 interruptions )
 
-  Implementation d'un asservissement PID par bibliotheque intégrée
-
-  Le systeme physique est tres amorti, ce qui semble rendre une reponse oscillante difficile a mettre en place
+  Asservissement PID implémenté intrinsequement précis
 
   La course est de 6647 impulsions
 
-  V 5  Hadrien Patte 25/02/2017
+  V 6  Hadrien Patte 25/02/2017
   ----------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------------------------------------------------------------------
   Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
             volatile pour les variables modifiables en interruption
             const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
-#include <PID_v2.h>
-
-double consigne = 3000;
-volatile double position = 0;             // position mesuree par le codeur
-long previousposition = 0;
 
 // Variables liées à l'affichage sr le port série
 unsigned long maintenant;
 unsigned long dernierAffichage;
 const int periodeAffichage = 50;
 
+// Variables liées au calcul du PID
+unsigned long dernierCalculPID = 0;
+volatile float position = 0; // input
+float dernierePosition = 0;
+float consigne = 3000; // setpoint
+float sortiePID = 0; // output
+float ITerm = 0;
+int periodePID = 10;
+int vitesseMin = 200;
+int vitesseMax = 255;
+
+// Coefficients PID
+float kp = 1;
+float ki = 0;
+float kd = 0;
+
 // Connexion du driver moteur L298N aux broches numeriques Arduino
-const byte pinPWM             =  9;      // Pin PWM enable
+const byte pinPWM             =   9;     // Pin PWM enable
 const byte pinMoteur1         =  10;     // Pin Moteur 1
 const byte pinMoteur2         =  11;     // Pin Moteur 2
 
@@ -48,20 +57,10 @@ boolean stateBoutonVert       =   1;     // Variable d'etat du bouton vert
 
 const byte pinInterrupteur    =  12;     // Broche de l'interrupteur de fin de course et d'initialisation de la position
 
-int vitesse                   = 255;     // Vitesse PWM du moteur (map 0-255)
-int homingSpeed               = 255;     // Vitesse de homing
-
-
-//PID
-float kp = 2;
-float ki = 0.11;
-float kd = 0;
-double output;
-
-PID myPID(&position, &output, &consigne, kp, ki, kd, DIRECT);
+int homingSpeed               = 255;     // Vitesse de homing (0-255)
 
 void setup() {
-  Serial.begin(115200);                 // Activation du moniteur serie
+  Serial.begin(115200);                  // Activation du moniteur serie
 
   // Initialisation des broches de commande du moteur
   pinMode(pinPWM,     OUTPUT);
@@ -90,21 +89,21 @@ void setup() {
   attachInterrupt(1, interruptionCodeurB, CHANGE); // interruption 1 sur le codeur B (PIN 3)
 
   // Initialise le PID
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetSampleTime(2);
-  myPID.SetOutputLimits(-255, 255);
+  ki = ki * ((float)periodePID) / 1000;
+  kd = kd * 1000 / ((float)periodePID);
 }
 
 void loop() {
   // boucle de controle asservi (reponse a une consigne)
-  myPID.Compute();
   afficher(position);
 
-  if (output > 200) {
-    deplacementGauche(output);
+  calculPID();
+
+  if ( (consigne - position) > 0.5) {
+    deplacementGauche(sortiePID);
   }
-  else if (output < -200) {
-    deplacementDroite(abs(output));
+  else if ( (consigne - position) < -0.5) {
+    deplacementDroite(abs(sortiePID));
   }
   else {
     arretMoteur();
@@ -114,28 +113,21 @@ void loop() {
 
 /*void loop() {
   // loop de controle manuel (boutons)
-  if (millis() > previousMillis + 300 )  {
-    Serial.print("Position = ");
-    Serial.println(position);
-    previousMillis = millis();
-  }
+  afficher(position);
 
   stateBoutonRouge = !digitalRead(pinBoutonRouge);   // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
   stateBoutonVert  = !digitalRead(pinBoutonVert);    // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
 
-  analogWrite(pinPWM, vitesse);                           // Envoi de la vitesse sur la pin PWM
-
   // Test des boutons pour deplacement manuel (fin de courses logicielles)
   if ((stateBoutonVert == HIGH) and (position > 0)) {
-    deplacementDroite();
+    deplacementDroite(vitesseMax);
   }
   else if ((stateBoutonRouge == HIGH) and (position < 6000)) {
-    deplacementGauche();
+    deplacementGauche(vitesseMax);
   }
   else {
     arretMoteur();
   }
-
 
   }*/
 
@@ -171,23 +163,7 @@ void deplacementDroite(int vitesse) {
   digitalWrite(pinMoteur1, HIGH);
   digitalWrite(pinMoteur2,  LOW);
 }
-// ---------------------------------------------------------------------------------------------------------------------------
-/*void deplacementProportionnel(k) {
-  // Deplacement du chariot proportionnel a k
-  if (k > 0) {
-    analogWrite(pinPWM, vitesse);
-    deplacementGauche();
-  }
-  else if (k < 0) {
-    analogWrite(pinPWM, vitesse);
-    deplacementDroite();
-  }
-  else {
-    analogWrite(pinPWM, 0);
-    arretMoteur();
-  }
 
-  }*/
 // ---------------------------------------------------------------------------------------------------------------------------
 void arretMoteur() {
   // Arret du moteur
@@ -195,6 +171,7 @@ void arretMoteur() {
   digitalWrite(pinMoteur1, LOW);
   digitalWrite(pinMoteur2, LOW);
 }
+
 // ---------------------------------------------------------------------------------------------------------------------------
 void afficher(volatile double variable) {
   // Affichage sur le port série toutes les period de la variable
@@ -204,56 +181,94 @@ void afficher(volatile double variable) {
     dernierAffichage = maintenant;
   }
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+void calculPID()
+{
+  maintenant = millis();
+  if ( (maintenant - dernierCalculPID) >= periodePID)
+  {
+    //Compute all the working erreur variables
+    float erreur = (consigne - position);
+    ITerm += (ki * erreur);
+    if (ITerm > vitesseMax) {
+      ITerm = vitesseMax;
+    }
+    else if (ITerm < vitesseMin) {
+      ITerm = vitesseMin;
+    }
+    float dposition = (position - dernierePosition);
+
+    // Calcul de sortiePID
+    sortiePID = kp * erreur + ITerm - kd * dposition;
+
+    // On cale sortiePID entre vitesseMIN et vitesseMAX
+    if (sortiePID >= 0) {
+      if (sortiePID > vitesseMax) {
+        sortiePID = vitesseMax;
+      }
+      else if (sortiePID < vitesseMin) {
+        sortiePID = vitesseMin;
+      }
+    }
+    else {
+      if (sortiePID > (0 - vitesseMin) ) {
+        sortiePID = (0 - vitesseMin);
+      }
+      else if (sortiePID < (0 - vitesseMax)) {
+        sortiePID = (0 - vitesseMax);
+      }
+    }
+
+    // Pour le prochain passage
+    dernierePosition = position;
+    dernierCalculPID = maintenant;
+  }
+}
 // ---------------------------------------------------------------------------------------------------------------------------
 void interruptionCodeurA() {
   stateCodeurA = (PIND & B00000100) >> 2;  // Lecture de la broche 2 en binaire ( equivaut a stateCodeurA = digitalRead(pinCodeurA); )
   stateCodeurB = (PIND & B00001000) >> 3;  // Lecture de la broche 3 en binaire ( equivaut a stateCodeurB = digitalRead(pinCodeurB); )
 
-  if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
-    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position -- ;           // CCW
-      //sens = false;
+  if (stateCodeurA == HIGH) {
+    if (stateCodeurB == HIGH) {
+      position -- ;
     }
     else {
-      position ++ ;                      // CW
-      //sens = true;
+      position ++ ;
     }
   }
   else {
-    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position ++ ;                       // CCW
-      //sens = true;
+    if (stateCodeurB == HIGH) {
+      position ++ ;
     }
     else {
-      position -- ;                       // CW
-      //sens = false;
+      position -- ;
     }
   }
 }
+
 // ---------------------------------------------------------------------------------------------------------------------------
 void interruptionCodeurB() {
   stateCodeurA = (PIND & B00000100) >> 2;  // Lecture de la broche 2 en binaire ( equivaut a stateCodeurA = digitalRead(pinCodeurA); )
   stateCodeurB = (PIND & B00001000) >> 3;  // Lecture de la broche 3 en binaire ( equivaut a stateCodeurB = digitalRead(pinCodeurB); )
 
-  if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
-    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position ++ ;           // CCW
-      //sens = false;
+  if (stateCodeurA == HIGH) {
+    if (stateCodeurB == HIGH) {
+      position ++ ;
     }
     else {
-      position -- ;                      // CW
-      //sens = true;
+      position -- ;
     }
   }
   else {
-    if (stateCodeurB == HIGH) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position -- ;                       // CCW
-      //sens = true;
+    if (stateCodeurB == HIGH) {
+      position -- ;
     }
     else {
-      position ++ ;                       // CW
-      //sens = false;
+      position ++ ;
     }
   }
 }
+
 // ---------------------------------------------------------------------------------------------------------------------------
