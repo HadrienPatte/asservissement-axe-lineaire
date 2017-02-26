@@ -1,28 +1,40 @@
 /* -------------------------------------------------------------------------------------------------------------------------
-  Pilotage moteur DC avec 2 boutons et un potentiometre
+  Pilotage moteur DC asservi
 
   Deux ILS gèrent les fin de course (interrupteur NC, ferme, donc 0, car connecte à GND par defaut)
   Le homing se fait sur l'ILS gauche
 
-  Implementation d'un asservissement PID par bibliothèque intégrée
-  Implementation de la vitesse instantanee par integration de la position
+  Asservissement PID implémenté intrinsequement précis
 
   La course est de 17904 impulsions
 
-  V 5  Hadrien Patte 25/02/2017
+  V 6  Hadrien Patte 26/02/2017
   ----------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------------------------------------------------------------------
   Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
             volatile pour les variables modifiables en interruption
             const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
-#include <PID_v2.h>
+// Variables liées à l'affichage sr le port série
+unsigned long maintenant;
+unsigned long dernierAffichage;
+const int periodeAffichage = 50;
 
-double consigne = 8000;
-volatile double position = 0;             // position mesuree par le codeur
+// Variables liées au calcul du PID
+unsigned long dernierCalculPID = 0;
+volatile float position = 0; // input
+float dernierePosition = 0;
+float consigne = 12000; // setpoint
+float sortiePID = 0; // output
+float ITerm = 0;
+int periodePID = 10;
+int vitesseMin = 200;
+int vitesseMax = 255;
 
-long previousMillis = 0;                // pour l'affichage de la position sur le port serie
-
+// Coefficients PID
+float kp = 1;
+float ki = 3;
+float kd = 0.3;
 
 // Connexion du driver moteur L298N aux broches numeriques Arduino
 const byte pinPWM             =  12;     // Pin PWM enable
@@ -38,31 +50,10 @@ boolean stateCodeurB          =   0;     // Variable d'etat du codeur B
 const byte pinILSDroit        =  14;     // Broche signal de l'ILS droit
 const byte pinILSGauche       =  15;     // Broche signal de l'ILS gauche (celui qui sert pour le homing)
 
-int homingSpeed               = 200;     // Vitesse de homing
-int vitesse                   = 255;
-
-
-volatile bool sens = false;
-
-float vitesseInstantanee = 0;
-
-const int period = 50;
-
-//PID
-int periodPID = 100;
-float kp = 1;
-float ki = 0;
-float kd = 0;
-//float previousError = 0;
-float previousPosition;
-float sumError;
-double output;
-unsigned long previousTime;
-
-PID myPID(&position, &output, &consigne, kp, ki, kd, DIRECT);
+int homingSpeed               = 255;     // Vitesse de homing (0-255)
 
 void setup() {
-  Serial.begin(115200);           // Activation de la communication sur le port série
+  Serial.begin(115200);                  // Activation du moniteur serie
 
   // Initialisation des broches de commande du moteur
   pinMode(pinPWM,     OUTPUT);
@@ -87,20 +78,15 @@ void setup() {
   attachInterrupt(1, interruptionCodeurB, CHANGE); // interruption 1 sur le codeur B (PIN 3)
 
   // Initialise le PID
-  myPID.SetMode(AUTOMATIC);
-  myPID.SetSampleTime(2);
-  myPID.SetOutputLimits(-255, 255);
+  ki = ki * ((float)periodePID) / 1000;
+  kd = kd * 1000 / ((float)periodePID);
 }
 
 void loop() {
   // boucle de controle asservi (reponse a une consigne)
-  myPID.Compute();
+  afficher(position);
 
-  // Affichage sur le port série toutes les period
-  if (millis() > previousMillis + period )  {
-    Serial.println(position);
-    previousMillis = millis();
-  }
+  calculPID();
 
   /*// Test de fin de course
     if ((digitalRead(pinILSGauche) == 1) or (digitalRead(pinILSDroit) == 1)) {
@@ -109,11 +95,11 @@ void loop() {
     }*/
 
 
-  if (output > 200) {
-    deplacementDroite(output);
+  if ( (consigne - position) > 10) {
+    deplacementDroite(sortiePID);
   }
-  else if (output < -200) {
-    deplacementGauche(abs(output));
+  else if ( (consigne - position) < -10) {
+    deplacementGauche(abs(sortiePID));
   }
   else {
     arretMoteur();
@@ -163,23 +149,60 @@ void arretMoteur() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-void deplacementPosition(long consigne) {
-  // deplacement jusqu a la position consigne avec retroaction
-  while (abs(consigne - position) > 10) {
-    if (consigne > position) {
-      deplacementDroite(vitesse);
-    }
-    else {
-      deplacementGauche(vitesse);
-    }
+void afficher(volatile double variable) {
+  // Affichage sur le port série toutes les period de la variable
+  maintenant = millis();
+  if ( (maintenant - dernierAffichage) >= periodeAffichage )  {
+    Serial.println(variable);
+    dernierAffichage = maintenant;
   }
-  arretMoteur();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
+void calculPID()
+{
+  maintenant = millis();
+  if ( (maintenant - dernierCalculPID) >= periodePID)
+  {
+    //Compute all the working erreur variables
+    float erreur = (consigne - position);
+    ITerm += (ki * erreur);
+    if (ITerm > vitesseMax) {
+      ITerm = vitesseMax;
+    }
+    else if (ITerm < vitesseMin) {
+      ITerm = vitesseMin;
+    }
+    float dposition = (position - dernierePosition);
 
-// Code for interrupt 0. Gives the encoder signed cumulated ticks, including CW and CCW (plus and minus) ways
+    // Calcul de sortiePID
+    sortiePID = kp * erreur + ITerm - kd * dposition;
 
+    // On cale sortiePID entre vitesseMIN et vitesseMAX
+    if (sortiePID >= 0) {
+      if (sortiePID > vitesseMax) {
+        sortiePID = vitesseMax;
+      }
+      else if (sortiePID < vitesseMin) {
+        sortiePID = vitesseMin;
+      }
+    }
+    else {
+      if (sortiePID > (0 - vitesseMin) ) {
+        sortiePID = (0 - vitesseMin);
+      }
+      else if (sortiePID < (0 - vitesseMax)) {
+        sortiePID = (0 - vitesseMax);
+      }
+    }
+
+    // Pour le prochain passage
+    dernierePosition = position;
+    dernierCalculPID = maintenant;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
 void interruptionCodeurA() {
   //stateCodeurA = (PINE & B00010000) >> 4;
   //stateCodeurB = (PINH & B00100000) >> 5;   //que pour la pin 8
@@ -188,25 +211,22 @@ void interruptionCodeurA() {
   stateCodeurB = digitalRead(pinCodeurB);
   if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
     if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position -- ;           // CCW
-      sens = false;
+      position -- ;
     }
     else {
-      position ++ ;                      // CW
-      //sens = true;
+      position ++ ;
     }
   }
   else {
     if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position ++ ;                       // CCW
-      sens = true;
+      position ++ ;
     }
     else {
-      position -- ;                       // CW
-      //sens = false;
+      position -- ;
     }
   }
 }
+
 // ---------------------------------------------------------------------------------------------------------------------------
 
 void interruptionCodeurB() {
@@ -217,41 +237,20 @@ void interruptionCodeurB() {
   stateCodeurB = digitalRead(pinCodeurB);
   if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
     if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position ++ ;           // CCW
-      sens = false;
+      position ++ ;
     }
     else {
-      position -- ;                      // CW
-      //sens = true;
+      position -- ;
     }
   }
   else {
     if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
-      position -- ;                       // CCW
-      sens = true;
+      position -- ;
     }
     else {
-      position ++ ;                       // CW
-      //sens = false;
+      position ++ ;
     }
   }
 }
-// ---------------------------------------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------------------------------------
-void correcteur() {
-  // Correcteur PID
-  unsigned long now = millis();
-  if ((now - previousTime) >= periodPID) {
-    // on fait les calculs
-    float error = consigne - position;
-    sumError += error;
-    float dPosition = position - previousPosition;
-    // on calcule output
-    output = kp * error + ki * sumError - kd * dPosition;
-
-    // pour le prochain passage
-    previousPosition = position;
-    previousTime = now;
-  }
-}
