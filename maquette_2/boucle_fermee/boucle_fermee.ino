@@ -3,15 +3,15 @@
 
   Le bouton de gauche (rouge) fait tourner le moteur dans un sens, l'autre bouton (vert) dans l'autre sens
 
-  Un interrupteur gere une fin de course et l'initialisation au homing (interrupteur NC, ferme, donc 0, car connecte à GND par defaut)
+  Un interrupteur gere une fin de course et l'initialisation au homing (interrupteur NC, ferme, donc 0, car connecte a GND par defaut)
 
   Les codeurs sont lus en binaire (lecture rapide) et sur les fronts montants ET descendants des deux codeurs ( 2 interruptions )
 
-  Asservissement PID implémenté intrinsequement précis
+  Asservissement PID implemente intrinsequement precis
 
   La course est de 6647 impulsions
 
-  V 6  Hadrien Patte 25/02/2017
+  V 7  Hadrien Patte 13/03/2017
   ----------------------------------------------------------------------------------------------------------------------------*/
 /* -------------------------------------------------------------------------------------------------------------------------
   Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
@@ -19,16 +19,16 @@
             const pour les pin
   ----------------------------------------------------------------------------------------------------------------------------*/
 
-// Variables liées à l'affichage sr le port série
+// Variables liees a l'affichage sr le port serie
 unsigned long maintenant;
 unsigned long dernierAffichage;
 const int periodeAffichage = 50;
 
-// Variables liées au calcul du PID
+// Variables liees au calcul du PID
 unsigned long dernierCalculPID = 0;
 volatile float position = 0; // input
 float dernierePosition = 0;
-float consigne = 3000; // setpoint
+float consigne = 5000; // setpoint
 float sortiePID = 0; // output
 float ITerm = 0;
 int periodePID = 10;
@@ -115,8 +115,8 @@ void loop() {
   // loop de controle manuel (boutons)
   afficher(position);
 
-  stateBoutonRouge = !digitalRead(pinBoutonRouge);   // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
-  stateBoutonVert  = !digitalRead(pinBoutonVert);    // On inverse la lecture car on veut le moteur arrete quand la pin est à l'état haut
+  stateBoutonRouge = !digitalRead(pinBoutonRouge);   // On inverse la lecture car on veut le moteur arrete quand la pin est a l'etat haut
+  stateBoutonVert  = !digitalRead(pinBoutonVert);    // On inverse la lecture car on veut le moteur arrete quand la pin est a l'etat haut
 
   // Test des boutons pour deplacement manuel (fin de courses logicielles)
   if ((stateBoutonVert == HIGH) and (position > 0)) {
@@ -150,7 +150,7 @@ void homing(int vitesseHoming) {
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void deplacementGauche(int vitesse) {
-  // Déplacement vers la gauche du chariot à la vitesse vitesse
+  // Deplacement vers la gauche du chariot a la vitesse vitesse
   analogWrite(pinPWM,   vitesse);            // Envoi de la vitesse sur la pin PWM pinPWM
   digitalWrite(pinMoteur1,  LOW);
   digitalWrite(pinMoteur2, HIGH);
@@ -174,7 +174,7 @@ void arretMoteur() {
 
 // ---------------------------------------------------------------------------------------------------------------------------
 void afficher(volatile double variable) {
-  // Affichage sur le port série toutes les period de la variable
+  // Affichage sur le port serie toutes les period de la variable
   maintenant = millis();
   if ( (maintenant - dernierAffichage) >= periodeAffichage )  {
     Serial.println(variable);
@@ -202,7 +202,7 @@ void calculPID()
     // Calcul de sortiePID
     sortiePID = kp * erreur + ITerm - kd * dposition;
 
-    // On cale sortiePID entre vitesseMIN et vitesseMAX
+    // On cale sortiePID entre vitesseMin et vitesseMAX
     if (sortiePID >= 0) {
       if (sortiePID > vitesseMax) {
         sortiePID = vitesseMax;
