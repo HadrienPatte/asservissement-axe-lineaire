@@ -1,4 +1,4 @@
-/* -------------------------------------------------------------------------------------------------------------------------
+/* -----------------------------------------------------------------------------------------------
   Pilotage moteur DC asservi
 
   Deux ILS gerent les fin de course (interrupteur NC, ferme, donc 0, car connecte a GND par defaut)
@@ -6,55 +6,55 @@
 
   Asservissement PID implemente intrinsequement precis
 
-  La course est de 17904 impulsions
+  La course est de 17904 impulsions (430 mm)
 
-  V 7  Hadrien Patte 13/03/2017
-  ----------------------------------------------------------------------------------------------------------------------------*/
-/* -------------------------------------------------------------------------------------------------------------------------
+  V 8  Hadrien Patte 29/05/2017
+// -----------------------------------------------------------------------------------------------
   Notes : * pas de pulldown internes sur des arduino, uniquement des pullup
-            volatile pour les variables modifiables en interruption
-            const pour les pin
-  ----------------------------------------------------------------------------------------------------------------------------*/
+          * volatile pour les variables modifiables en interruption
+          * const pour les pin
+  ----------------------------------------------------------------------------------------------- */
 // Variables liees a l'affichage sr le port serie
 unsigned long maintenant;
 unsigned long dernierAffichage;
-const int periodeAffichage = 50;
+const int periodeAffichage     = 50;
 
 // Variables liees au calcul du PID
 unsigned long dernierCalculPID = 0;
-volatile float position = 0; // input
-float dernierePosition = 0;
-float consigne = 10000; // setpoint
-float sortiePID = 0; // output
-float ITerm = 0;
-int periodePID = 10;
-int vitesseMin = 200;
-int vitesseMax = 255;
+volatile float position        = 0;      // input
+float dernierePosition         = 0;
+float consigneEnMilimetre      = 100;
+float consigne                 = 0;      // setpoint
+float sortiePID                = 0;      // output
+float ITerm                    = 0;
+int periodePID                 = 10;
+int vitesseMin                 = 150;
+int vitesseMax                 = 255;
+int homingSpeed                = 150;    // Vitesse de homing (0-255)
 
 // Coefficients PID
-float kp = 1;
-float ki = 10;
-float kd = 0.5;
 /*float kp = 1;
-  float ki = 0;
-  float kd = 0;*/
+float ki = 10;
+float kd = 0.5;*/
+
+float kp = 6;
+float ki = 4.6;
+float kd = 2;
 
 // Connexion du driver moteur L298N aux broches numeriques Arduino
-const byte pinPWM             =  12;     // Pin PWM enable
-const byte pinMoteur1         =  11;     // Pin Moteur 1
-const byte pinMoteur2         =  10;     // Pin Moteur 2
+const byte pinPWM              =  12;    // Pin PWM enable
+const byte pinMoteur1          =  11;    // Pin Moteur 1
+const byte pinMoteur2          =  10;    // Pin Moteur 2
 
-const byte pinCodeurA         =   2;     // Broche signal codeur A
-const byte pinCodeurB         =   3;     // Broche signal codeur B
-boolean stateCodeurA          =   0;     // Variable d'etat du codeur A
-boolean stateCodeurB          =   0;     // Variable d'etat du codeur B
+const byte pinCodeurA          =   2;    // Broche signal codeur A
+const byte pinCodeurB          =   3;    // Broche signal codeur B
+boolean stateCodeurA           =   0;    // Variable d'etat du codeur A
+boolean stateCodeurB           =   0;    // Variable d'etat du codeur B
 
+const byte pinILSDroit         =  14;    // Broche signal de l'ILS droit
+const byte pinILSGauche        =  15;    // Broche signal de l'ILS gauche (celui qui sert pour le homing)
 
-const byte pinILSDroit        =  14;     // Broche signal de l'ILS droit
-const byte pinILSGauche       =  15;     // Broche signal de l'ILS gauche (celui qui sert pour le homing)
-
-int homingSpeed               = 200;     // Vitesse de homing (0-255)
-
+// -----------------------------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);                  // Activation du moniteur serie
 
@@ -83,8 +83,12 @@ void setup() {
   // Initialise le PID
   ki = ki * ((float)periodePID) / 1000;
   kd = kd * 1000 / ((float)periodePID);
+
+  // Adapte la consigne mm -> increments
+  consigne = consigneEnMilimetre * 40.8;
 }
 
+// -----------------------------------------------------------------------------------------------
 void loop() {
   // boucle de controle asservi (reponse a une consigne)
   afficher(position);
@@ -110,7 +114,7 @@ void loop() {
 
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------
 void homing(int vitesseHoming) {
   // On Fait avancer le chariot vers la gauche tant que l'ILS gauche a le status 0. On arrete le moteur quand l'ILS passe au status 1
   analogWrite(pinPWM, homingSpeed);            // Envoi de la vitesse de homing sur la pin PWM
@@ -127,7 +131,7 @@ void homing(int vitesseHoming) {
   delay(300);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------
 void deplacementGauche(int vitesse) {
   // Deplacement vers la gauche du chariot a la vitesse vitesse
   analogWrite(pinPWM,   vitesse);            // Envoi de la vitesse sur la pin PWM pinPWM
@@ -135,7 +139,7 @@ void deplacementGauche(int vitesse) {
   digitalWrite(pinMoteur2, HIGH);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------
 void deplacementDroite(int vitesse) {
   // Deplacement vers la droite du chariot
   analogWrite(pinPWM,   vitesse);            // Envoi de la vitesse sur la pin PWM pinPWM
@@ -143,7 +147,7 @@ void deplacementDroite(int vitesse) {
   digitalWrite(pinMoteur2,  LOW);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------
 void arretMoteur() {
   // Arret du moteur
   analogWrite(pinPWM,        0);
@@ -151,21 +155,20 @@ void arretMoteur() {
   digitalWrite(pinMoteur2, LOW);
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------
 void afficher(volatile double variable) {
-  // Affichage sur le port serie toutes les period de la variable
+  // Affichage sur le port serie toutes les periodeAffichage de la variable
   maintenant = millis();
   if ( (maintenant - dernierAffichage) >= periodeAffichage )  {
     //if (abs(variable - consigne) > 5) {
-    Serial.println(variable);
+    Serial.println(variable / 40.8);
     //}
     dernierAffichage = maintenant;
   }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
-void calculPID()
-{
+// -----------------------------------------------------------------------------------------------
+void calculPID() {
   maintenant = millis();
   if ( (maintenant - dernierCalculPID) >= periodePID)
   {
@@ -207,13 +210,11 @@ void calculPID()
   }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------
 void interruptionCodeurA() {
-  //stateCodeurA = (PINE & B00010000) >> 4;
-  //stateCodeurB = (PINH & B00100000) >> 5;   //que pour la pin 8
+  stateCodeurA = (PINE & B00010000) >> 4; // Lecture de la broche 2 en binaire ( equivaut a stateCodeurA = digitalRead(pinCodeurA); )
+  stateCodeurB = (PINE & B00100000) >> 5; // Lecture de la broche 3 en binaire ( equivaut a stateCodeurB = digitalRead(pinCodeurB); )
 
-  stateCodeurA = digitalRead(pinCodeurA);
-  stateCodeurB = digitalRead(pinCodeurB);
   if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
     if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
       position -- ;
@@ -232,14 +233,11 @@ void interruptionCodeurA() {
   }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
-
+// -----------------------------------------------------------------------------------------------
 void interruptionCodeurB() {
-  //stateCodeurA = (PINE & B00010000) >> 4;
-  //stateCodeurB = (PINH & B00100000) >> 5;   //que pour la pin 8
+  stateCodeurA = (PINE & B00010000) >> 4; // Lecture de la broche 2 en binaire ( equivaut a stateCodeurA = digitalRead(pinCodeurA); )
+  stateCodeurB = (PINE & B00100000) >> 5; // Lecture de la broche 3 en binaire ( equivaut a stateCodeurB = digitalRead(pinCodeurB); )
 
-  stateCodeurA = digitalRead(pinCodeurA);
-  stateCodeurB = digitalRead(pinCodeurB);
   if (stateCodeurA == HIGH) {              // Found a low-to-high on A phase. if(digitalRead(pinCodeurA)==HIGH){ .... read PE4
     if (stateCodeurB == LOW) {             // Check B phase to see which way. if(digitalRead(pinCodeurB)==LOW) { .... read PH5
       position ++ ;
@@ -258,4 +256,4 @@ void interruptionCodeurB() {
   }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------
+// -----------------------------------------------------------------------------------------------
